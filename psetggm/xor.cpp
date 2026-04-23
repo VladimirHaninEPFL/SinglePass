@@ -5,6 +5,16 @@
 #include "intrinsics.h"
 #include "xor.h"
 
+namespace {
+
+inline void xor_tail_bytes(uint8_t* out, const uint8_t* in, unsigned int start, unsigned int elem_size) {
+    for (unsigned int i = start; i < elem_size; i++) {
+        out[i] ^= in[i];
+    }
+}
+
+} // namespace
+
 extern "C"
 {
     
@@ -13,6 +23,7 @@ extern "C"
     void xor_into(uint8_t* out, uint8_t* in, unsigned int elem_size) {
 
         __m256i *block = (__m256i *)(in);
+        unsigned int vec_bytes = (elem_size / 32) * 32;
         for (int b = 0; b < (elem_size / 32); b++)
         {
             __m256i out256 = _mm256_loadu_si256((__m256i *)out + b);
@@ -20,9 +31,7 @@ extern "C"
             out256 = _mm256_xor_si256(out256, elem);
             _mm256_storeu_si256((__m256i *)out + b,  out256);
         }
-        if ((elem_size % 32) != 0) {
-            //add logic to deal with non-multiples of 32 bytes         
-        }
+        xor_tail_bytes(out, in, vec_bytes, elem_size);
         return;
     }
 
@@ -31,6 +40,7 @@ extern "C"
 
         memset(out, 0, elem_size);
         uint8_t* curr_db = db;
+        unsigned int vec_bytes = (elem_size / 32) * 32;
         for (int i = 0; i < num_elems; i++)
         {   
 
@@ -42,10 +52,8 @@ extern "C"
                 out256 = _mm256_xor_si256(out256, elem);
                 _mm256_storeu_si256((__m256i *)out + b,  out256);
             }
+            xor_tail_bytes(out, curr_db, vec_bytes, elem_size);
             curr_db = (uint8_t*)(curr_db + elem_size);
-        }
-        if ((elem_size % 32) != 0) {
-            //add logic to deal with non-multiples of 32 bytes         
         }
         return;
     }
@@ -145,6 +153,7 @@ extern "C"
 
     void xor_single_pass(uint8_t* db, uint32_t* inverse_perm, unsigned int perm_size,  uint8_t* parities, unsigned int elem_size) {
         uint8_t* curr_db = db;
+        unsigned int vec_bytes = (elem_size / 32) * 32;
         for (int i = 0; i < perm_size; i++)
         {
             uint8_t* curr_parity = parities + inverse_perm[i]*elem_size;
@@ -158,11 +167,9 @@ extern "C"
                 par256 = _mm256_xor_si256(par256, elem);
                 _mm256_storeu_si256((__m256i *)curr_parity + b,  par256);
             }
+            xor_tail_bytes(curr_parity, curr_db, vec_bytes, elem_size);
 
             curr_db += elem_size;
-        }
-        if ((elem_size % 32) != 0) {
-            //add logic to deal with non-multiples of 32 bytes         
         }
         return;
         
@@ -225,6 +232,7 @@ extern "C"
 
     void xor_into(uint8_t* out, uint8_t* in, unsigned int elem_size) {
          __m128i *block = (__m128i *)(in);
+        unsigned int vec_bytes = (elem_size / 16) * 16;
         for (int b = 0; b < (elem_size / 16); b++)
         {
             __m128i out128 = _mm_loadu_si128((__m128i *)out + b);
@@ -232,9 +240,7 @@ extern "C"
             out128 = _mm_xor_si128(out128, elem);
             _mm_storeu_si128((__m128i *)out + b,  out128);
         }
-        if ((elem_size % 16) != 0) {
-            //add logic to deal with non-multiples of 16 bytes         
-        }
+        xor_tail_bytes(out, in, vec_bytes, elem_size);
         return;
     }
 
@@ -243,6 +249,7 @@ extern "C"
 
         memset(out, 0, elem_size);
         uint8_t* curr_db = db;
+        unsigned int vec_bytes = (elem_size / 16) * 16;
         for (int i = 0; i < num_elems; i++)
         {   
             
@@ -255,10 +262,8 @@ extern "C"
                 out128 = _mm_xor_si128(out128, elem);
                 _mm_storeu_si128((__m128i *)out + b,  out128);
             }
+            xor_tail_bytes(out, curr_db, vec_bytes, elem_size);
             curr_db = (uint8_t*)(curr_db + elem_size);
-        }
-        if ((elem_size % 16) != 0) {
-            //add logic to deal with non-multiples of 16 bytes         
         }
         return;
     }
@@ -345,6 +350,7 @@ extern "C"
     void xor_single_pass(uint8_t* db, uint32_t* inverse_perm, unsigned int perm_size,  uint8_t* parities, unsigned int elem_size) {
 
         uint8_t* curr_db = db;
+        unsigned int vec_bytes = (elem_size / 16) * 16;
         for (int i = 0; i < perm_size; i++)
         {
             ;
@@ -359,11 +365,9 @@ extern "C"
                 par128 = _mm_xor_si128(par128, elem);
                 _mm_storeu_si128((__m128i *)curr_parity + b,  par128);
             }
+            xor_tail_bytes(curr_parity, curr_db, vec_bytes, elem_size);
 
             curr_db += elem_size;
-        }
-        if ((elem_size % 16) != 0) {
-            //add logic to deal with non-multiples of 16 bytes         
         }
         return;
         
