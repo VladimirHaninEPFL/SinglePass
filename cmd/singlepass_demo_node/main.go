@@ -5,41 +5,145 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"strings"
 	"time"
 
 	"checklist/pir"
 )
 
 func main() {
+
+	// FRANCE
+
+	// this is for the node approach (naive format), for france-navigation
+	// const (
+	// 	numEntries = 10_134_850
+	// 	entrySize  = 28
+	// )
+
+	// this is for the node approach (naive format), for france-navigation, with 1 neighbourgh depth
+	// const (
+	// 	numEntries = 10_134_850
+	// 	entrySize  = (1 + 4) * 28
+	// )
+
+	// this is for the node approach (naive format), for france-navigation, with 2 neighbourgh depth
+	// const (
+	// 	numEntries = 10_134_850
+	// 	entrySize  = (1 + 4 + 4*4) * 28
+	// )
+
+	// this is for the node approach (naive format), for france-navigation, with 3 neighbourgh depth
+	// const (
+	// 	numEntries = 10_134_850
+	// 	entrySize  = (1 + 4 + 4*4 + 4*4*4) * 28
+	// )
+
+	// this is for the block approach (with size 0.1)
+	// const (
+	// 	numEntries = 10_134_850
+	// 	entrySize  = 306_480
+	// )
+
+	// this is for the block approach (with size 0.25)
+	// const (
+	// 	numEntries = 108
+	// 	entrySize  = 1_128_000
+	// )
+
+	// this is for the block approach (with size 0.5)
+	// const (
+	// 	numEntries = 36
+	// 	entrySize  = 2_426_928
+	// )
+
+	// this is for the block approach (with size 1)
+	// const (
+	// 	numEntries = 13
+	// 	entrySize  = 5_670_960
+	// )
+
+	// ------------- SWITZERLAND -------------
+
+	// this is for the node0 approach (naive format), for switzreland-navigation
+	// const (
+	// 	numEntries = 416_799
+	// 	entrySize  = 28
+	// )
+
+	// this is for the node1 approach (naive format), for switzreland-navigation, with 1 neighbourgh depth
+	// const (
+	// 	numEntries = 416_799
+	// 	entrySize  = (1 + 4) * 28
+	// )
+
+	// this is for the node2 approach (naive format), for switzreland-navigation, with 2 neighbourgh depth
+	// const (
+	// 	numEntries = 416_799
+	// 	entrySize  = (1 + 4 + 4*4) * 28
+	// )
+
+	// this is for the node3 approach (naive format), for switzreland-navigation, with 3 neighbourgh depth
+	// const (
+	// 	numEntries = 416_799
+	// 	entrySize  = (1 + 4 + 4*4 + 4*4*4) * 28
+	// )
+
+	// this is for the block approach for switzerland (with size 0.1)
+	// const (
+	// 	numEntries = 533
+	// 	entrySize  = 306_480
+	// )
+
+	// this is for the block approach for switzerland (with size 0.25)
+	// const (
+	// 	numEntries = 108
+	// 	entrySize  = 1_128_000
+	// )
+
+	// this is for the block approach for switzerland (with size 0.5)
+	// const (
+	// 	numEntries = 36
+	// 	entrySize  = 2_426_928
+	// )
+
+	// this is for the block approach for switzerland (with size 1)
 	const (
-		nRows  = 467_856 // padded from 467344
-		rowLen = 34
-
-		setSize = 684
-
-		numTrials = 100
+		numEntries = 13
+		entrySize  = 5_670_960
 	)
 
-	// const (
-	// 	nRows   = 467344
-	// 	rowLen  = 34
-	// 	setSize = 16
-	// 	target  = 12345 // any index in [0, 467343]
+	const numTrials = 1000
+
+	params, err := pir.EstimateSinglePassParams(numEntries, entrySize)
+	if err != nil {
+		log.Fatalf("failed to derive SinglePass parameters: %v", err)
+	}
+
+	// fmt.Printf(
+	// 	"singlepass_params = {num_entries: %d, padded_entries: %d, padding_entries: %d, entry_size: %d, setSize: %d, nHints: %d, offline_hint_bytes: %d, approx_client_state_bytes: %d, approx_online_bandwidth_bytes: %d}\n",
+	// 	params.NumRows,
+	// 	params.PaddedRows,
+	// 	params.PaddingRows,
+	// 	params.RowLen,
+	// 	params.SetSize,
+	// 	params.NHints,
+	// 	params.OfflineHintBytes,
+	// 	params.ClientStateBytes,
+	// 	params.OnlineBandwidthBytes,
 	// )
 
 	// Demo RNG for reproducible behavior.
-	src := rand.New(rand.NewSource(42))
+	random := rand.New(rand.NewSource(42))
 
-	// Build one logical database, then replicate it to two PIR servers.
-	rows := pir.MakeRows(src, nRows, rowLen)
+	// Build one logical database, pad with dummy rows if needed, then replicate it to two PIR servers.
+	rows := makeDemoRows(random, params.NumRows, params.PaddedRows, params.RowLen)
 	leftServer := *pir.StaticDBFromRows(rows)
 	rightServer := *pir.StaticDBFromRows(rows)
 
 	// ===== OFFLINE PHASE =====
 
 	// Client asks one server for the SinglePass preprocessing hint.
-	hintReq := pir.NewHintReq(src, pir.SinglePass, setSize)
+	hintReq := pir.NewHintReq(random, pir.SinglePass, params.SetSize)
 
 	var hintResp pir.HintResp
 	if err := leftServer.Hint(hintReq, &hintResp); err != nil {
@@ -47,17 +151,18 @@ func main() {
 	}
 
 	// Client stores the offline hint/state locally.
-	client := hintResp.InitClient(src)
+	client := hintResp.InitClient(random)
 
 	trialDurations := make([]time.Duration, numTrials)
+	onlineBytesPerQuery := 0
 
 	for trial := 0; trial < numTrials; trial++ {
 
 		// ===== ONLINE PHASE =====
 		queryStart := time.Now()
 
-		// Client creates one query for each server.
-		target := src.Intn(nRows)
+		// Client creates one query for each real database entry.
+		target := random.Intn(params.NumRows)
 		queries, reconstruct := client.Query(target)
 
 		queryDuration := time.Since(queryStart)
@@ -76,6 +181,7 @@ func main() {
 			log.Fatalf("right server answer failed: %v", err)
 		}
 		rightDuration := time.Since(rightStart)
+		onlineBytesPerQuery = singlePassResponsePayloadBytes(responses)
 
 		// Client reconstructs the requested row.
 		reconstructStart := time.Now()
@@ -85,17 +191,28 @@ func main() {
 		}
 		reconstructDuration := time.Since(reconstructStart)
 
-		serverDuration := maxDuration(leftDuration, rightDuration)
-		totalOnlineDuration := queryDuration + serverDuration + reconstructDuration
-		trialDurations[trial] = totalOnlineDuration
-
 		// Check correctness.
 		if !bytes.Equal(row, leftServer.Row(target)) {
 			log.Fatalf("wrong row returned on trial %d", trial)
 		}
+
+		serverDuration := maxDuration(leftDuration, rightDuration)
+		totalOnlineDuration := queryDuration + serverDuration + reconstructDuration
+		trialDurations[trial] = totalOnlineDuration
 	}
 
-	fmt.Printf("online_times_seconds = [%s]\n", formatDurationsSeconds(trialDurations))
+	fmt.Printf("mean_online_time_seconds = %.9f\n", meanDurationSeconds(trialDurations))
+	fmt.Printf("server_to_client_online_bytes_per_query = %d\n", onlineBytesPerQuery)
+}
+
+func makeDemoRows(src *rand.Rand, numRows, paddedRows, rowLen int) []pir.Row {
+	rows := pir.MakeRows(src, numRows, rowLen)
+
+	for len(rows) < paddedRows {
+		rows = append(rows, make(pir.Row, rowLen))
+	}
+
+	return rows
 }
 
 func maxDuration(a, b time.Duration) time.Duration {
@@ -105,12 +222,29 @@ func maxDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-func formatDurationsSeconds(durations []time.Duration) string {
-	parts := make([]string, len(durations))
-
-	for i, d := range durations {
-		parts[i] = fmt.Sprintf("%.9f", d.Seconds())
+func meanDurationSeconds(durations []time.Duration) float64 {
+	if len(durations) == 0 {
+		return 0
 	}
 
-	return strings.Join(parts, ", ")
+	var total time.Duration
+	for _, d := range durations {
+		total += d
+	}
+
+	return total.Seconds() / float64(len(durations))
+}
+
+func singlePassResponsePayloadBytes(responses []interface{}) int {
+	total := 0
+
+	for _, response := range responses {
+		singlePassResp, ok := response.(*pir.SinglePassQueryResp)
+		if !ok {
+			continue
+		}
+		total += len(singlePassResp.Answer)
+	}
+
+	return total
 }
