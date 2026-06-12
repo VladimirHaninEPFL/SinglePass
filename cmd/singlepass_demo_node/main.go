@@ -21,92 +21,93 @@ func main() {
 	// switzerlandConfigs := [...]demoConfig{
 	// 	{
 	// 		name:       "node0",
-	// 		numEntries: 416_799,
+	// 		numEntries: 467_344,
 	// 		entrySize:  28,
 	// 	},
 	// 	{
 	// 		name:       "node1",
-	// 		numEntries: 416_799,
+	// 		numEntries: 467_344,
 	// 		entrySize:  (1 + 4) * 28,
 	// 	},
 	// 	{
 	// 		name:       "node2",
-	// 		numEntries: 416_799,
+	// 		numEntries: 467_344,
 	// 		entrySize:  (1 + 4 + 4*4) * 28,
 	// 	},
 	// 	{
 	// 		name:       "node3",
-	// 		numEntries: 416_799,
+	// 		numEntries: 467_344,
 	// 		entrySize:  (1 + 4 + 4*4 + 4*4*4) * 28,
 	// 	},
 	// 	{
 	// 		name:       "block0.1",
-	// 		numEntries: 533,
-	// 		entrySize:  306_480,
+	// 		numEntries: 536,
+	// 		entrySize:  6857 * 48,
 	// 	},
 	// 	{
 	// 		name:       "block0.25",
 	// 		numEntries: 108,
-	// 		entrySize:  1_128_000,
+	// 		entrySize:  23500 * 48,
 	// 	},
 	// 	{
 	// 		name:       "block0.5",
 	// 		numEntries: 36,
-	// 		entrySize:  2_426_928,
+	// 		entrySize:  57_497 * 48,
 	// 	},
 	// 	{
 	// 		name:       "block1",
 	// 		numEntries: 13,
-	// 		entrySize:  5_670_960,
+	// 		entrySize:  133_323 * 48,
 	// 	},
 	// }
 
 	franceConfigs := [...]demoConfig{
-		// {
-		// 	name:       "node0",
-		// 	numEntries: 11_370_599,
-		// 	entrySize:  28,
-		// },
-		// {
-		// 	name:       "node1",
-		// 	numEntries: 11_370_599,
-		// 	entrySize:  (1 + 4) * 28,
-		// },
-		// {
-		// 	name:       "node2",
-		// 	numEntries: 11_370_599,
-		// 	entrySize:  (1 + 4 + 4*4) * 28,
-		// },
+		{
+			name:       "node0",
+			numEntries: 5_196_479,
+			entrySize:  28,
+		},
+		{
+			name:       "node1",
+			numEntries: 5_196_479,
+			entrySize:  (1 + 4) * 28,
+		},
+		{
+			name:       "node2",
+			numEntries: 5_196_479,
+			entrySize:  (1 + 4 + 4*4) * 28,
+		},
 		{
 			name:       "node3",
-			numEntries: 11_370_599,
+			numEntries: 5_196_479,
 			entrySize:  (1 + 4 + 4*4 + 4*4*4) * 28,
 		},
-		// {
-		// 	name:       "block0.1",
-		// 	numEntries: 6810,
-		// 	entrySize:  12_745 * 48,
-		// },
-		// {
-		// 	name:       "block0.25",
-		// 	numEntries: 1170,
-		// 	entrySize:  63_245 * 48,
-		// },
-		// {
-		// 	name:       "block0.5",
-		// 	numEntries: 326,
-		// 	entrySize:  149_848 * 48,
-		// },
-		// {
-		// 	name:       "block1",
-		// 	numEntries: 96,
-		// 	entrySize:  241_882 * 48,
-		// },
+		{
+			name:       "block0.1",
+			numEntries: 6810,
+			entrySize:  12_745 * 48,
+		},
+		{
+			name:       "block0.25",
+			numEntries: 1170,
+			entrySize:  63_245 * 48,
+		},
+		{
+			name:       "block0.5",
+			numEntries: 326,
+			entrySize:  149_848 * 48,
+		},
+		{
+			name:       "block1",
+			numEntries: 96,
+			entrySize:  241_882 * 48,
+		},
 	}
 
-	const numTrials = 1
+	const numTrials = 10
 
 	for _, config := range franceConfigs {
+		fmt.Printf("franceConfigs\n")
 
 		params, err := pir.EstimateSinglePassParams(config.numEntries, config.entrySize)
 		if err != nil {
