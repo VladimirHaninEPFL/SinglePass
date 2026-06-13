@@ -8,13 +8,9 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"os"
+	"strconv"
 )
-
-type demoConfig struct {
-	name       string
-	numEntries int
-	entrySize  int
-}
 
 // Message type tags — must match server
 const (
@@ -38,24 +34,25 @@ func main() {
 	gob.Register(pir.SinglePassQueryReq{})
 	gob.Register(pir.SinglePassQueryResp{})
 
-	config := demoConfig{
-		name:       "node0",
-		numEntries: 55_000,
-		entrySize:  28,
-	}
-	params, err := pir.EstimateSinglePassParams(config.numEntries, config.entrySize)
-	if err != nil {
-		log.Fatalf("failed to derive SinglePass parameters: %v", err)
+	// * parse command line argmuents
+	if len(os.Args) != 3 {
+		log.Fatalf("usage: client <setSize> <socket-path>")
 	}
 
-	// Connect to both servers
-	leftConn, err := net.Dial("unix", "/tmp/SinglePass-left.sock")
+	setSize, err := strconv.Atoi(os.Args[1])
+	if err != nil || setSize <= 0 {
+		log.Fatalf("invalid setsize value %q", os.Args[1])
+	}
+	socketToRustClientPath := os.Args[2]
+
+	// * Connect to both servers
+	leftConn, err := net.Dial("unix", "/tmp/SinglePass-server-left.sock")
 	if err != nil {
 		log.Fatalf("failed to connect to left server: %v", err)
 	}
 	defer leftConn.Close()
 
-	rightConn, err := net.Dial("unix", "/tmp/SinglePass-right.sock")
+	rightConn, err := net.Dial("unix", "/tmp/SinglePass-server-right.sock")
 	if err != nil {
 		log.Fatalf("failed to connect to right server: %v", err)
 	}
@@ -65,10 +62,10 @@ func main() {
 	leftDec := gob.NewDecoder(leftConn)
 	rightEnc := gob.NewEncoder(rightConn)
 	rightDec := gob.NewDecoder(rightConn)
+	// ===== OFFLINE PHASE SINGLEPASS =====
 
-	// ===== OFFLINE PHASE =====
 	random := rand.New(rand.NewSource(42))
-	hintReq := pir.NewHintReq(random, pir.SinglePass, params.SetSize)
+	hintReq := pir.NewHintReq(random, pir.SinglePass, setSize)
 
 	fmt.Println("sending hint request to left server...")
 	if err := sendMsg(leftConn, MsgHintReq, leftEnc, hintReq); err != nil {
@@ -84,9 +81,11 @@ func main() {
 	client := hintResp.InitClient(random)
 	fmt.Println("offline phase complete, listening for rust queries...")
 
-	// ===== ONLINE PHASE =====
-	// Listen for index queries from Rust
-	rustLn, err := net.Listen("unix", "/tmp/SinglePass-client.sock")
+	// ===== ONLINE PHASE SINGLE PASS =====
+	socketPath := "/tmp/SinglePass-client.sock"
+	os.Remove(socketPath) // clean up stale socket if any
+
+	rustLn, err := net.Listen("unix", socketPath)
 	if err != nil {
 		log.Fatalf("failed to listen for rust: %v", err)
 	}
@@ -96,17 +95,12 @@ func main() {
 	}
 	fmt.Println("rust connected")
 
+	// receive as many messsages from that rust client
 	for {
 
-		// Read index from Rust
 		var target int32
 		if err := binary.Read(rustConn, binary.LittleEndian, &target); err != nil {
-			fmt.Println("rust disconnected, waiting for new connection...")
-			rustConn, err = rustLn.Accept()
-			if err != nil {
-				log.Fatalf("failed to accept rust connection: %v", err)
-			}
-			continue
+			break
 		}
 		fmt.Printf("received query for index %d\n", target)
 

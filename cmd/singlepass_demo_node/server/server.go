@@ -5,17 +5,12 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"log"
-	"math/rand"
 	"net"
 	"os"
+	"strconv"
 )
-
-type demoConfig struct {
-	name       string
-	numEntries int
-	entrySize  int
-}
 
 // Message type tags sent over the socket
 const (
@@ -29,107 +24,125 @@ func main() {
 	gob.Register(pir.SinglePassQueryReq{})
 	gob.Register(pir.SinglePassQueryResp{})
 
-	if len(os.Args) < 2 {
-		log.Fatalf("usage: server [left|right]")
-	}
-	role := os.Args[1] // "left" or "right"
-	if role != "left" && role != "right" {
-		log.Fatalf("role must be 'left' or 'right', received %s", role)
+	// * parse command line argmuents
+	if len(os.Args) != 5 {
+		log.Fatalf("usage: singlepass-server <db-file> <num-rows> <row-size> <socket-path>")
 	}
 
-	config := demoConfig{
-		name:       "node0",
-		numEntries: 55_000,
-		entrySize:  28,
+	dbPath := os.Args[1]
+	numRows, err := strconv.Atoi(os.Args[2])
+	if err != nil || numRows <= 0 {
+		log.Fatalf("invalid num-rows value %q", os.Args[3])
 	}
-	params, err := pir.EstimateSinglePassParams(config.numEntries, config.entrySize)
+	rowSize, err := strconv.Atoi(os.Args[3])
+	if err != nil || rowSize <= 0 {
+		log.Fatalf("invalid row-size value %q", os.Args[4])
+	}
+	socketToRustServerPath := os.Args[4]
+
+	// * load database
+	rows, err := loadRowsFromFile(dbPath, numRows, rowSize)
 	if err != nil {
-		log.Fatalf("failed to derive SinglePass parameters: %v", err)
+		log.Fatalf("failed to load rows from %s: %v", dbPath, err)
 	}
-
-	// Build the database (same seed on both sides so they hold identical data)
-	random := rand.New(rand.NewSource(42))
-	rows := makeDemoRows(random, params.NumRows, params.PaddedRows, params.RowLen)
 	db := *pir.StaticDBFromRows(rows)
-	fmt.Printf("[%s] database ready (%d rows x %d bytes)\n", role, params.NumRows, params.RowLen)
+	fmt.Printf("loaded database from %s (%d rows x %d bytes)\n", dbPath, numRows, rowSize)
 
-	socketPath := fmt.Sprintf("/tmp/SinglePass-%s.sock", role)
-	os.Remove(socketPath) // clean up stale socket if any
+	// * listen for connections
+	os.Remove(socketToRustServerPath) // clean up stale socket if any
 
-	ln, err := net.Listen("unix", socketPath)
+	ln, err := net.Listen("unix", socketToRustServerPath)
 	if err != nil {
-		log.Fatalf("failed to listen on %s: %v", socketPath, err)
+		log.Fatalf("failed to listen on %s: %v", socketToRustServerPath, err)
 	}
-	fmt.Printf("[%s] listening on %s\n", role, socketPath)
+	fmt.Printf("listening on %s\n", socketToRustServerPath)
 
+	// only accept one rust server connection
+	conn, err := ln.Accept()
+	if err != nil {
+		log.Printf("accept failed: %v", err)
+
+	}
+	defer conn.Close()
+	fmt.Printf("client connected\n")
+
+	dec := gob.NewDecoder(conn)
+	enc := gob.NewEncoder(conn)
+
+	// listen for as many messages from that rust-server until it closes conection
 	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Printf("[%s] accept failed: %v", role, err)
-			continue
-		}
-		fmt.Printf("[%s] client connected\n", role)
 
-		dec := gob.NewDecoder(conn)
-		enc := gob.NewEncoder(conn)
-
-		for {
-			// Read the message type tag
-			var msgType uint8
-			if err := binary.Read(conn, binary.LittleEndian, &msgType); err != nil {
-				fmt.Printf("[%s] connection closed: %v\n", role, err)
-				break
-			}
-
-			switch msgType {
-
-			case MsgHintReq:
-
-				var req pir.SinglePassHintReq
-				if err := dec.Decode(&req); err != nil {
-					log.Fatalf("[%s] failed to decode HintReq: %v", role, err)
-				}
-				fmt.Printf("[%s] processing HintReq\n", role)
-
-				var resp pir.HintResp
-				if err := db.Hint(&req, &resp); err != nil {
-					log.Fatalf("[%s] hint generation failed: %v", role, err)
-				}
-				if err := enc.Encode(resp); err != nil {
-					log.Fatalf("[%s] failed to send HintResp: %v", role, err)
-				}
-
-			case MsgAnswerReq:
-
-				var req pir.SinglePassQueryReq
-				if err := dec.Decode(&req); err != nil {
-					log.Fatalf("[%s] failed to decode QueryReq: %v", role, err)
-				}
-				fmt.Printf("[%s] processing AnswerReq\n", role)
-
-				var respIface interface{} = &pir.SinglePassQueryResp{}
-				if err := db.Answer(&req, &respIface); err != nil {
-					log.Fatalf("[%s] answer failed: %v", role, err)
-				}
-				resp := respIface.(*pir.SinglePassQueryResp)
-				if err := enc.Encode(resp); err != nil {
-					log.Fatalf("[%s] failed to send answer: %v", role, err)
-				}
-
-			default:
-				log.Fatalf("[%s] unknown message type: %d", role, msgType)
-			}
+		var msgType uint8
+		if err := binary.Read(conn, binary.LittleEndian, &msgType); err != nil {
+			fmt.Printf("connection closed: %v\n", err)
+			break
 		}
 
-		conn.Close()
-		fmt.Printf("[%s] client disconnected\n", role)
+		switch msgType {
+		case MsgHintReq:
+			var req pir.SinglePassHintReq
+			if err := dec.Decode(&req); err != nil {
+				log.Fatalf("failed to decode HintReq: %v", err)
+			}
+			fmt.Printf("processing HintReq\n")
+
+			var resp pir.HintResp
+			if err := db.Hint(&req, &resp); err != nil {
+				log.Fatalf("hint generation failed: %v", err)
+			}
+			if err := enc.Encode(resp); err != nil {
+				log.Fatalf("failed to send HintResp: %v", err)
+			}
+
+		case MsgAnswerReq:
+			var req pir.SinglePassQueryReq
+			if err := dec.Decode(&req); err != nil {
+				log.Fatalf("failed to decode QueryReq: %v", err)
+			}
+			fmt.Printf("processing AnswerReq\n")
+
+			var respIface interface{} = &pir.SinglePassQueryResp{}
+			if err := db.Answer(&req, &respIface); err != nil {
+				log.Fatalf("answer failed: %v", err)
+			}
+			resp := respIface.(*pir.SinglePassQueryResp)
+			if err := enc.Encode(resp); err != nil {
+				log.Fatalf("failed to send answer: %v", err)
+			}
+
+		default:
+			log.Fatalf("unknown message type: %d", msgType)
+		}
 	}
 }
 
-func makeDemoRows(src *rand.Rand, numRows, paddedRows, rowLen int) []pir.Row {
-	rows := pir.MakeRows(src, numRows, rowLen)
-	for len(rows) < paddedRows {
-		rows = append(rows, make(pir.Row, rowLen))
+func loadRowsFromFile(path string, numRows, rowSize int) ([]pir.Row, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
-	return rows
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	expected := int64(numRows) * int64(rowSize)
+	if stat.Size() != expected {
+		return nil, fmt.Errorf("file size %d does not match expected %d (numRows=%d rowSize=%d)", stat.Size(), expected, numRows, rowSize)
+	}
+
+	data := make([]byte, expected)
+	if _, err := io.ReadFull(f, data); err != nil {
+		return nil, err
+	}
+
+	rows := make([]pir.Row, numRows)
+	for i := 0; i < numRows; i++ {
+		start := i * rowSize
+		end := start + rowSize
+		rows[i] = pir.Row(data[start:end])
+	}
+	return rows, nil
 }
