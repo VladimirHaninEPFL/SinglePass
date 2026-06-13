@@ -55,6 +55,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to listen on %s: %v", socketToRustServerPath, err)
 	}
+	defer ln.Close()
 	fmt.Printf("listening on %s\n", socketToRustServerPath)
 
 	// only accept one rust server connection
@@ -75,7 +76,7 @@ func main() {
 		var msgType uint8
 		if err := binary.Read(conn, binary.LittleEndian, &msgType); err != nil {
 			fmt.Printf("connection closed: %v\n", err)
-			break
+			return
 		}
 
 		switch msgType {

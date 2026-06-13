@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"checklist/pir"
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -12,29 +14,19 @@ import (
 	"strconv"
 )
 
-// Message type tags — must match server
 const (
-	MsgHintReq   uint8 = 1
-	MsgAnswerReq uint8 = 2
+	CmdGenerateHintReq uint8 = 1
+	CmdInitHintResp    uint8 = 2
+	CmdGenerateQuery   uint8 = 3
+	CmdReconstructRow  uint8 = 4
 )
 
-func sendMsg(conn net.Conn, msgType uint8, enc *gob.Encoder, payload interface{}) error {
-	if err := binary.Write(conn, binary.LittleEndian, msgType); err != nil {
-		return fmt.Errorf("failed to write msg type: %w", err)
-	}
-	if err := enc.Encode(payload); err != nil {
-		return fmt.Errorf("failed to encode payload: %w", err)
-	}
-	return nil
-}
-
 func main() {
-	gob.Register(pir.SinglePassHintReq{})
-	gob.Register(pir.SinglePassHintResp{})
-	gob.Register(pir.SinglePassQueryReq{})
-	gob.Register(pir.SinglePassQueryResp{})
+	gob.Register(&pir.SinglePassHintReq{})
+	gob.Register(&pir.SinglePassHintResp{})
+	gob.Register(&pir.SinglePassQueryReq{})
+	gob.Register(&pir.SinglePassQueryResp{})
 
-	// * parse command line argmuents
 	if len(os.Args) != 3 {
 		log.Fatalf("usage: client <setSize> <socket-path>")
 	}
@@ -43,99 +35,167 @@ func main() {
 	if err != nil || setSize <= 0 {
 		log.Fatalf("invalid setsize value %q", os.Args[1])
 	}
-	socketToRustClientPath := os.Args[2]
+	clientSocketPath := os.Args[2]
 
-	// * Connect to both servers
-	leftConn, err := net.Dial("unix", "/tmp/SinglePass-server-left.sock")
+	os.Remove(clientSocketPath)
+	ln, err := net.Listen("unix", clientSocketPath)
 	if err != nil {
-		log.Fatalf("failed to connect to left server: %v", err)
+		log.Fatalf("failed to listen for rust client: %v", err)
 	}
-	defer leftConn.Close()
+	defer ln.Close()
+	fmt.Printf("client listening on %s\n", clientSocketPath)
 
-	rightConn, err := net.Dial("unix", "/tmp/SinglePass-server-right.sock")
-	if err != nil {
-		log.Fatalf("failed to connect to right server: %v", err)
-	}
-	defer rightConn.Close()
-
-	leftEnc := gob.NewEncoder(leftConn)
-	leftDec := gob.NewDecoder(leftConn)
-	rightEnc := gob.NewEncoder(rightConn)
-	rightDec := gob.NewDecoder(rightConn)
-	// ===== OFFLINE PHASE SINGLEPASS =====
-
-	random := rand.New(rand.NewSource(42))
-	hintReq := pir.NewHintReq(random, pir.SinglePass, setSize)
-
-	fmt.Println("sending hint request to left server...")
-	if err := sendMsg(leftConn, MsgHintReq, leftEnc, hintReq); err != nil {
-		log.Fatalf("failed to send hint request: %v", err)
-	}
-
-	var hintResp pir.SinglePassHintResp
-	if err := leftDec.Decode(&hintResp); err != nil {
-		log.Fatalf("failed to receive hint response: %v", err)
-	}
-	fmt.Println("received hint response, initializing client state...")
-
-	client := hintResp.InitClient(random)
-	fmt.Println("offline phase complete, listening for rust queries...")
-
-	// ===== ONLINE PHASE SINGLE PASS =====
-	socketPath := "/tmp/SinglePass-client.sock"
-	os.Remove(socketPath) // clean up stale socket if any
-
-	rustLn, err := net.Listen("unix", socketPath)
-	if err != nil {
-		log.Fatalf("failed to listen for rust: %v", err)
-	}
-	rustConn, err := rustLn.Accept()
+	conn, err := ln.Accept()
 	if err != nil {
 		log.Fatalf("failed to accept rust connection: %v", err)
 	}
-	fmt.Println("rust connected")
+	defer conn.Close()
+	fmt.Println("rust client connected")
 
-	// receive as many messsages from that rust client
+	randSource := rand.New(rand.NewSource(42))
+	var client pir.Client
+	var reconstruct pir.ReconstructFunc
+
+	// listen to as many messages from the rust client
 	for {
 
-		var target int32
-		if err := binary.Read(rustConn, binary.LittleEndian, &target); err != nil {
-			break
-		}
-		fmt.Printf("received query for index %d\n", target)
-
-		// Generate PIR queries for both servers
-		queries, reconstruct := client.Query(int(target))
-
-		// Send query to left server
-		if err := sendMsg(leftConn, MsgAnswerReq, leftEnc, queries[pir.Left]); err != nil {
-			log.Fatalf("failed to send left query: %v", err)
-		}
-		// Send query to right server
-		if err := sendMsg(rightConn, MsgAnswerReq, rightEnc, queries[pir.Right]); err != nil {
-			log.Fatalf("failed to send right query: %v", err)
+		var cmd uint8
+		if err := binary.Read(conn, binary.LittleEndian, &cmd); err != nil {
+			fmt.Printf("rust connection closed: %v\n", err)
+			return
 		}
 
-		// Receive answers from both servers
-		var leftResp pir.SinglePassQueryResp
-		var rightResp pir.SinglePassQueryResp
-		if err := leftDec.Decode(&leftResp); err != nil {
-			log.Fatalf("failed to receive left answer: %v", err)
-		}
-		if err := rightDec.Decode(&rightResp); err != nil {
-			log.Fatalf("failed to receive right answer: %v", err)
-		}
-		responses := []interface{}{&leftResp, &rightResp}
+		switch cmd {
+		case CmdGenerateHintReq:
+			hintReq := pir.NewHintReq(randSource, pir.SinglePass, setSize)
+			data, err := encodeGob(hintReq)
+			if err != nil {
+				log.Fatalf("failed to serialize hint request: %v", err)
+			}
+			if err := writeBytes(conn, data); err != nil {
+				log.Fatalf("failed to send hint request: %v", err)
+			}
 
-		// Reconstruct the row
-		row, err := reconstruct(responses)
-		if err != nil {
-			log.Fatalf("reconstruction failed: %v", err)
-		}
+		case CmdInitHintResp:
+			respData, err := readBytes(conn)
+			if err != nil {
+				log.Fatalf("failed to read hint response: %v", err)
+			}
+			var hintResp pir.SinglePassHintResp
+			if err := decodeGob(respData, &hintResp); err != nil {
+				log.Fatalf("failed to decode hint response: %v", err)
+			}
+			client = hintResp.InitClient(randSource)
 
-		// Send row back to Rust
-		fmt.Printf("sending %d bytes back to rust\n", len(row))
-		binary.Write(rustConn, binary.LittleEndian, int32(len(row)))
-		rustConn.Write(row)
+		case CmdGenerateQuery:
+			if client == nil {
+				log.Fatalf("client is not initialized; must receive hint response first")
+			}
+
+			var target int32
+			if err := binary.Read(conn, binary.LittleEndian, &target); err != nil {
+				log.Fatalf("failed to read query target: %v", err)
+			}
+			queries, fn := client.Query(int(target))
+			reconstruct = fn
+
+			leftBytes, err := encodeGob(queries[pir.Left])
+			if err != nil {
+				log.Fatalf("failed to serialize left query: %v", err)
+			}
+			if err := writeBytes(conn, leftBytes); err != nil {
+				log.Fatalf("failed to send left query: %v", err)
+			}
+
+			rightBytes, err := encodeGob(queries[pir.Right])
+			if err != nil {
+				log.Fatalf("failed to serialize right query: %v", err)
+			}
+			if err := writeBytes(conn, rightBytes); err != nil {
+				log.Fatalf("failed to send right query: %v", err)
+			}
+
+		case CmdReconstructRow:
+			if reconstruct == nil {
+				log.Fatalf("reconstruction closure is not available; generate query first")
+			}
+
+			leftRespData, err := readBytes(conn)
+			if err != nil {
+				log.Fatalf("failed to read left response: %v", err)
+			}
+			var leftResp pir.SinglePassQueryResp
+			if err := decodeGob(leftRespData, &leftResp); err != nil {
+				log.Fatalf("failed to decode left response: %v", err)
+			}
+
+			rightRespData, err := readBytes(conn)
+			if err != nil {
+				log.Fatalf("failed to read right response: %v", err)
+			}
+			var rightResp pir.SinglePassQueryResp
+			if err := decodeGob(rightRespData, &rightResp); err != nil {
+				log.Fatalf("failed to decode right response: %v", err)
+			}
+
+			row, err := reconstruct([]interface{}{&leftResp, &rightResp})
+			if err != nil {
+				log.Fatalf("failed to reconstruct row: %v", err)
+			}
+			if err := writeBytes(conn, row); err != nil {
+				log.Fatalf("failed to send reconstructed row: %v", err)
+			}
+			reconstruct = nil
+
+		default:
+			log.Fatalf("unknown command from rust client: %d", cmd)
+		}
 	}
+}
+
+func encodeGob(value interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(value); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func decodeGob(data []byte, value interface{}) error {
+	buf := bytes.NewBuffer(data)
+	dec := gob.NewDecoder(buf)
+	return dec.Decode(value)
+}
+
+func writeBytes(conn net.Conn, data []byte) error {
+	length := int32(0)
+	if data != nil {
+		length = int32(len(data))
+	}
+	if err := binary.Write(conn, binary.LittleEndian, length); err != nil {
+		return err
+	}
+	if length > 0 {
+		_, err := conn.Write(data)
+		return err
+	}
+	return nil
+}
+
+func readBytes(conn net.Conn) ([]byte, error) {
+	var length int32
+	if err := binary.Read(conn, binary.LittleEndian, &length); err != nil {
+		return nil, err
+	}
+	if length < 0 {
+		return nil, fmt.Errorf("invalid length %d", length)
+	}
+	data := make([]byte, length)
+	if length > 0 {
+		if _, err := io.ReadFull(conn, data); err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
 }
