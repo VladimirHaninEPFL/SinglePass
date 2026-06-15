@@ -10,3 +10,5 @@ cd /home/hanin/SinglePass
 
 go build -o pir-server cmd/singlepass_demo_node/server/server.go
 go build -o pir-client cmd/singlepass_demo_node/client/client.go
+
+echo "done :)"
