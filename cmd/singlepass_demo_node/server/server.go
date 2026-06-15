@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"checklist/pir"
 	"encoding/binary"
 	"encoding/gob"
@@ -14,8 +15,8 @@ import (
 
 // Message type tags sent over the socket
 const (
-	MsgHintReq   uint8 = 1
-	MsgAnswerReq uint8 = 2
+	MsgHintReq uint8 = 1
+	MsgDBQuery uint8 = 2
 )
 
 func main() {
@@ -48,7 +49,7 @@ func main() {
 	db := *pir.StaticDBFromRows(rows)
 	fmt.Printf("loaded database from %s (%d rows x %d bytes)\n", dbPath, numRows, rowSize)
 
-	// * listen for connections
+	// * connect to rust server
 	os.Remove(socketToRustServerPath) // clean up stale socket if any
 
 	ln, err := net.Listen("unix", socketToRustServerPath)
@@ -58,7 +59,6 @@ func main() {
 	defer ln.Close()
 	fmt.Printf("listening on %s\n", socketToRustServerPath)
 
-	// only accept one rust server connection
 	conn, err := ln.Accept()
 	if err != nil {
 		log.Printf("accept failed: %v", err)
@@ -67,22 +67,29 @@ func main() {
 	defer conn.Close()
 	fmt.Printf("client connected\n")
 
-	dec := gob.NewDecoder(conn)
-	enc := gob.NewEncoder(conn)
-
 	// listen for as many messages from that rust-server until it closes conection
 	for {
 
-		var msgType uint8
-		if err := binary.Read(conn, binary.LittleEndian, &msgType); err != nil {
+		// read message type as a length-prefixed single byte
+		msgTypeData, err := readBytes(conn)
+		if err != nil {
 			fmt.Printf("connection closed: %v\n", err)
 			return
 		}
+		if len(msgTypeData) == 0 {
+			log.Fatalf("empty message type")
+		}
+		msgType := msgTypeData[0]
 
 		switch msgType {
+
 		case MsgHintReq:
 			var req pir.SinglePassHintReq
-			if err := dec.Decode(&req); err != nil {
+			reqData, err := readBytes(conn)
+			if err != nil {
+				log.Fatalf("failed to read HintReq: %v", err)
+			}
+			if err := decodeGob(reqData, &req); err != nil {
 				log.Fatalf("failed to decode HintReq: %v", err)
 			}
 			fmt.Printf("processing HintReq\n")
@@ -91,13 +98,21 @@ func main() {
 			if err := db.Hint(&req, &resp); err != nil {
 				log.Fatalf("hint generation failed: %v", err)
 			}
-			if err := enc.Encode(resp); err != nil {
+			respData, err := encodeGob(resp)
+			if err != nil {
+				log.Fatalf("failed to serialize HintResp: %v", err)
+			}
+			if err := writeBytes(conn, respData); err != nil {
 				log.Fatalf("failed to send HintResp: %v", err)
 			}
 
-		case MsgAnswerReq:
+		case MsgDBQuery:
 			var req pir.SinglePassQueryReq
-			if err := dec.Decode(&req); err != nil {
+			reqData, err := readBytes(conn)
+			if err != nil {
+				log.Fatalf("failed to read QueryReq: %v", err)
+			}
+			if err := decodeGob(reqData, &req); err != nil {
 				log.Fatalf("failed to decode QueryReq: %v", err)
 			}
 			fmt.Printf("processing AnswerReq\n")
@@ -107,7 +122,11 @@ func main() {
 				log.Fatalf("answer failed: %v", err)
 			}
 			resp := respIface.(*pir.SinglePassQueryResp)
-			if err := enc.Encode(resp); err != nil {
+			respData, err := encodeGob(resp)
+			if err != nil {
+				log.Fatalf("failed to serialize answer: %v", err)
+			}
+			if err := writeBytes(conn, respData); err != nil {
 				log.Fatalf("failed to send answer: %v", err)
 			}
 
@@ -146,4 +165,51 @@ func loadRowsFromFile(path string, numRows, rowSize int) ([]pir.Row, error) {
 		rows[i] = pir.Row(data[start:end])
 	}
 	return rows, nil
+}
+
+func encodeGob(value interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(value); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func decodeGob(data []byte, value interface{}) error {
+	buf := bytes.NewBuffer(data)
+	dec := gob.NewDecoder(buf)
+	return dec.Decode(value)
+}
+
+func writeBytes(conn net.Conn, data []byte) error {
+	length := int32(0)
+	if data != nil {
+		length = int32(len(data))
+	}
+	if err := binary.Write(conn, binary.LittleEndian, length); err != nil {
+		return err
+	}
+	if length > 0 {
+		_, err := conn.Write(data)
+		return err
+	}
+	return nil
+}
+
+func readBytes(conn net.Conn) ([]byte, error) {
+	var length int32
+	if err := binary.Read(conn, binary.LittleEndian, &length); err != nil {
+		return nil, err
+	}
+	if length < 0 {
+		return nil, fmt.Errorf("invalid length %d", length)
+	}
+	data := make([]byte, length)
+	if length > 0 {
+		if _, err := io.ReadFull(conn, data); err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
 }
