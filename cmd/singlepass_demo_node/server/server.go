@@ -92,7 +92,7 @@ func main() {
 			if err := decodeGob(reqData, &req); err != nil {
 				log.Fatalf("failed to decode HintReq: %v", err)
 			}
-			fmt.Printf("processing HintReq\n")
+			// fmt.Printf("processing HintReq\n")
 
 			var resp pir.HintResp
 			if err := db.Hint(&req, &resp); err != nil {
@@ -115,7 +115,7 @@ func main() {
 			if err := decodeGob(reqData, &req); err != nil {
 				log.Fatalf("failed to decode QueryReq: %v", err)
 			}
-			fmt.Printf("processing AnswerReq\n")
+			// fmt.Printf("processing AnswerReq\n")
 
 			var respIface interface{} = &pir.SinglePassQueryResp{}
 			if err := db.Answer(&req, &respIface); err != nil {
@@ -183,33 +183,23 @@ func decodeGob(data []byte, value interface{}) error {
 }
 
 func writeBytes(conn net.Conn, data []byte) error {
-	length := int32(0)
-	if data != nil {
-		length = int32(len(data))
-	}
+	length := uint32(len(data))
 	if err := binary.Write(conn, binary.LittleEndian, length); err != nil {
 		return err
 	}
-	if length > 0 {
-		_, err := conn.Write(data)
-		return err
-	}
-	return nil
+	_, err := conn.Write(data)
+	return err
 }
 
 func readBytes(conn net.Conn) ([]byte, error) {
-	var length int32
+	var length uint32
 	if err := binary.Read(conn, binary.LittleEndian, &length); err != nil {
 		return nil, err
 	}
-	if length < 0 {
-		return nil, fmt.Errorf("invalid length %d", length)
-	}
+
 	data := make([]byte, length)
-	if length > 0 {
-		if _, err := io.ReadFull(conn, data); err != nil {
-			return nil, err
-		}
+	if _, err := io.ReadFull(conn, data); err != nil {
+		return nil, err
 	}
 	return data, nil
 }

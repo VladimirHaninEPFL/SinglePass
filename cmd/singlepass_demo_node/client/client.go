@@ -35,53 +35,57 @@ func main() {
 		log.Fatalf("failed to listen for rust client: %v", err)
 	}
 	defer ln.Close()
-	fmt.Printf("client listening on %s\n", clientSocketPath)
+	fmt.Printf("[singlepass-client] listening on %s...\n", clientSocketPath)
 
 	conn, err := ln.Accept()
 	if err != nil {
 		log.Fatalf("failed to accept rust connection: %v", err)
 	}
 	defer conn.Close()
-	fmt.Println("rust client connected")
-
-	randSource := rand.New(rand.NewSource(42))
+	fmt.Println("[singlepass-client] connection made ! starting singlepass protocol...")
 
 	// ------ OFFLINE PHASE OF SINGLEPASS ------
 
+	randSource := rand.New(rand.NewSource(42))
+
 	// generate hint request
+	fmt.Println("[singlepass-client] Generating hint request...")
 	hintReq := pir.NewHintReq(randSource, pir.SinglePass, setSize)
 	data, err := encodeGob(hintReq)
 	if err != nil {
 		log.Fatalf("failed to serialize hint request: %v", err)
 	}
+	fmt.Printf("[singlepass-client] sending hint request ...\n")
 	if err := writeBytes(conn, data); err != nil {
 		log.Fatalf("failed to send hint request: %v", err)
 	}
 
 	// receive hint response and generate client
+	fmt.Println("[singlepass-client] receiving hint response...")
 	respData, err := readBytes(conn)
 	if err != nil {
 		log.Fatalf("failed to read hint response: %v", err)
 	}
+
 	var hintResp pir.SinglePassHintResp
 	if err := decodeGob(respData, &hintResp); err != nil {
 		log.Fatalf("failed to decode hint response: %v", err)
 	}
 	client := hintResp.InitClient(randSource)
+	fmt.Println("[singlepass-client] client created !")
 
 	// ------ ONLINE PHASE OF SINGLEPASS ------
 	// listen to as many db quests from the rust client
 	for {
 
-		// receive db index
 		targetData, err := readBytes(conn)
 		if err != nil {
 			log.Fatalf("failed to read query target: %v", err)
 		}
-		var target uint32
-		if err := decodeGob(targetData, &target); err != nil {
-			log.Fatalf("failed to decode target: %v", err)
+		if len(targetData) != 4 {
+			log.Fatalf("unexpected target length: %d", len(targetData))
 		}
+		target := binary.LittleEndian.Uint32(targetData)
 		queries, reconstruct := client.Query(int(target))
 
 		// write the two requests consecutatively
@@ -147,33 +151,23 @@ func decodeGob(data []byte, value interface{}) error {
 }
 
 func writeBytes(conn net.Conn, data []byte) error {
-	length := int32(0)
-	if data != nil {
-		length = int32(len(data))
-	}
+	length := uint32(len(data))
 	if err := binary.Write(conn, binary.LittleEndian, length); err != nil {
 		return err
 	}
-	if length > 0 {
-		_, err := conn.Write(data)
-		return err
-	}
-	return nil
+	_, err := conn.Write(data)
+	return err
 }
 
 func readBytes(conn net.Conn) ([]byte, error) {
-	var length int32
+	var length uint32
 	if err := binary.Read(conn, binary.LittleEndian, &length); err != nil {
 		return nil, err
 	}
-	if length < 0 {
-		return nil, fmt.Errorf("invalid length %d", length)
-	}
+
 	data := make([]byte, length)
-	if length > 0 {
-		if _, err := io.ReadFull(conn, data); err != nil {
-			return nil, err
-		}
+	if _, err := io.ReadFull(conn, data); err != nil {
+		return nil, err
 	}
 	return data, nil
 }
