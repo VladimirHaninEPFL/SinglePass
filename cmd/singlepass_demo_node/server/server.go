@@ -47,7 +47,7 @@ func main() {
 		log.Fatalf("failed to load rows from %s: %v", dbPath, err)
 	}
 	db := *pir.StaticDBFromRows(rows)
-	fmt.Printf("loaded database from %s (%d rows x %d bytes)\n", dbPath, numRows, rowSize)
+	// fmt.Printf("loaded database from %s (%d rows x %d bytes)\n", dbPath, numRows, rowSize)
 
 	// * connect to rust server
 	os.Remove(socketToRustServerPath) // clean up stale socket if any
@@ -57,7 +57,7 @@ func main() {
 		log.Fatalf("failed to listen on %s: %v", socketToRustServerPath, err)
 	}
 	defer ln.Close()
-	fmt.Printf("listening on %s\n", socketToRustServerPath)
+	// fmt.Printf("listening on %s\n", socketToRustServerPath)
 
 	conn, err := ln.Accept()
 	if err != nil {
@@ -65,7 +65,7 @@ func main() {
 
 	}
 	defer conn.Close()
-	fmt.Printf("client connected\n")
+	fmt.Println("[singlepass-server] connection made ! starting singlepass protocol...")
 
 	// listen for as many messages from that rust-server until it closes conection
 	for {

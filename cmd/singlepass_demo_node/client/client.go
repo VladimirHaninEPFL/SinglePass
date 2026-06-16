@@ -49,19 +49,19 @@ func main() {
 	randSource := rand.New(rand.NewSource(42))
 
 	// generate hint request
-	fmt.Println("[singlepass-client] Generating hint request...")
+	// fmt.Println("[singlepass-client] Generating hint request...")
 	hintReq := pir.NewHintReq(randSource, pir.SinglePass, setSize)
 	data, err := encodeGob(hintReq)
 	if err != nil {
 		log.Fatalf("failed to serialize hint request: %v", err)
 	}
-	fmt.Printf("[singlepass-client] sending hint request ...\n")
+	// fmt.Printf("[singlepass-client] sending hint request ...\n")
 	if err := writeBytes(conn, data); err != nil {
 		log.Fatalf("failed to send hint request: %v", err)
 	}
 
 	// receive hint response and generate client
-	fmt.Println("[singlepass-client] receiving hint response...")
+	// fmt.Println("[singlepass-client] receiving hint response...")
 	respData, err := readBytes(conn)
 	if err != nil {
 		log.Fatalf("failed to read hint response: %v", err)
@@ -72,7 +72,7 @@ func main() {
 		log.Fatalf("failed to decode hint response: %v", err)
 	}
 	client := hintResp.InitClient(randSource)
-	fmt.Println("[singlepass-client] client created !")
+	// fmt.Println("[singlepass-client] client created !")
 
 	// ------ ONLINE PHASE OF SINGLEPASS ------
 	// listen to as many db quests from the rust client
