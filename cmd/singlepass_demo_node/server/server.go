@@ -65,7 +65,7 @@ func main() {
 
 	}
 	defer conn.Close()
-	fmt.Println("[singlepass-server] connection made ! starting singlepass protocol...")
+	// fmt.Println("[singlepass-server] connection made ! starting singlepass protocol...")
 
 	// listen for as many messages from that rust-server until it closes conection
 	for {
@@ -73,7 +73,7 @@ func main() {
 		// read message type as a length-prefixed single byte
 		msgTypeData, err := readBytes(conn)
 		if err != nil {
-			fmt.Printf("connection closed: %v\n", err)
+			// fmt.Printf("connection closed: %v\n", err)
 			return
 		}
 		if len(msgTypeData) == 0 {

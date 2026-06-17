@@ -5,7 +5,6 @@ import (
 	"checklist/pir"
 	"encoding/binary"
 	"encoding/gob"
-	"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -35,14 +34,14 @@ func main() {
 		log.Fatalf("failed to listen for rust client: %v", err)
 	}
 	defer ln.Close()
-	fmt.Printf("[singlepass-client] listening on %s...\n", clientSocketPath)
+	// fmt.Printf("[singlepass-client] listening on %s...\n", clientSocketPath)
 
 	conn, err := ln.Accept()
 	if err != nil {
 		log.Fatalf("failed to accept rust connection: %v", err)
 	}
 	defer conn.Close()
-	fmt.Println("[singlepass-client] connection made ! starting singlepass protocol...")
+	// fmt.Println("[singlepass-client] connection made ! starting singlepass protocol...")
 
 	// ------ OFFLINE PHASE OF SINGLEPASS ------
 
